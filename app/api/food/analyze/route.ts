@@ -4,6 +4,8 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024
+const SUPPORTED_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
 const FOOD_ANALYSIS_PROMPT = `You are a nutrition expert. Analyze this food image and return ONLY valid JSON with this structure:
 {
@@ -38,11 +40,23 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json({ error: 'ANTHROPIC_API_KEY is missing' }, { status: 503 })
+    }
+
     const formData = await req.formData()
     const imageFile = formData.get('image') as File | null
 
     if (!imageFile) {
       return NextResponse.json({ error: 'No image provided' }, { status: 400 })
+    }
+
+    if (!SUPPORTED_MEDIA_TYPES.has(imageFile.type)) {
+      return NextResponse.json({ error: 'Unsupported image type' }, { status: 400 })
+    }
+
+    if (imageFile.size > MAX_IMAGE_BYTES) {
+      return NextResponse.json({ error: 'Image is too large' }, { status: 413 })
     }
 
     // Convert to base64

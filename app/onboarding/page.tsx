@@ -78,11 +78,12 @@ export default function OnboardingPage() {
           quiz_answers: { weight, height, age, gender, activity, goal },
         }),
       })
+      const data = await res.json()
       if (res.ok) {
         toast.success('ตั้งค่าเสร็จแล้ว! 🎉')
         router.push('/dashboard')
       } else {
-        toast.error('เกิดข้อผิดพลาด')
+        toast.error(data.error || 'เกิดข้อผิดพลาด')
       }
     } finally {
       setSaving(false)

@@ -1,6 +1,6 @@
 import { NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
-import { supabaseAdmin } from '@/lib/supabase'
+import { ensureUserProfile, findUserProfile, isUuid } from '@/lib/user-profile'
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -11,36 +11,64 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async signIn({ user, account }) {
-      if (account?.provider === 'google' && user.email && supabaseAdmin) {
-        const { error } = await supabaseAdmin
-          .from('user_profiles')
-          .upsert({
+      if (account?.provider === 'google' && user.email) {
+        try {
+          const profile = await ensureUserProfile({
             id: user.id,
             email: user.email,
             name: user.name,
-            avatar_url: user.image,
-            updated_at: new Date().toISOString(),
-          }, { onConflict: 'email' })
-        if (error) console.error('Profile upsert error:', error)
+            image: user.image,
+          })
+          user.id = profile.id
+        } catch (error) {
+          console.error('Profile sync error:', error)
+        }
       }
       return true
     },
     async session({ session, token }) {
-      if (session.user && token.sub) {
-        session.user.id = token.sub
-        if (supabaseAdmin) {
-          const { data } = await supabaseAdmin
-            .from('user_profiles')
-            .select('weight_kg, height_cm, age')
-            .eq('id', token.sub)
-            .single()
-          session.user.profileComplete = !!(data?.weight_kg && data?.height_cm && data?.age)
+      if (session.user) {
+        try {
+          const profile = await findUserProfile({ id: token.sub, email: token.email })
+          if (profile) {
+            session.user.id = profile.id
+            session.user.profileComplete = !!(profile.weight_kg && profile.height_cm && profile.age)
+          } else if (token.sub) {
+            session.user.id = token.sub
+          }
+        } catch (error) {
+          console.error('Session profile lookup error:', error)
+          if (token.sub) session.user.id = token.sub
         }
       }
       return session
     },
     async jwt({ token, user }) {
-      if (user) token.sub = user.id
+      if (user?.email) {
+        try {
+          const profile = await ensureUserProfile({
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            image: user.image,
+          })
+          token.sub = profile.id
+        } catch (error) {
+          console.error('JWT profile sync error:', error)
+          if (user.id) token.sub = user.id
+        }
+        return token
+      }
+
+      if ((!token.sub || !isUuid(token.sub)) && token.email) {
+        try {
+          const profile = await findUserProfile({ id: token.sub, email: token.email })
+          if (profile) token.sub = profile.id
+        } catch (error) {
+          console.error('JWT profile lookup error:', error)
+        }
+      }
+
       return token
     },
   },

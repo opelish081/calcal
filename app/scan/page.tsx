@@ -36,10 +36,93 @@ const CONFIDENCE_COLORS: Record<string, string> = {
   low: 'bg-red-100 text-red-600',
 }
 
+const MAX_ANALYZE_UPLOAD_BYTES = 3.5 * 1024 * 1024
+const MAX_IMAGE_DIMENSION = 1600
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file)
+    const image = new Image()
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      resolve(image)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('Image load failed'))
+    }
+
+    image.src = objectUrl
+  })
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Image compression failed'))
+        return
+      }
+      resolve(blob)
+    }, 'image/jpeg', quality)
+  })
+}
+
+async function optimizeImageForAnalyze(file: File) {
+  const image = await loadImage(file)
+  const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(image.width, image.height))
+
+  let width = Math.max(1, Math.round(image.width * scale))
+  let height = Math.max(1, Math.round(image.height * scale))
+  let quality = 0.86
+
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Canvas is not available')
+
+  const render = async () => {
+    canvas.width = width
+    canvas.height = height
+    context.clearRect(0, 0, width, height)
+    context.drawImage(image, 0, 0, width, height)
+    return canvasToBlob(canvas, quality)
+  }
+
+  let blob = await render()
+
+  while (blob.size > MAX_ANALYZE_UPLOAD_BYTES && quality > 0.56) {
+    quality -= 0.08
+    blob = await render()
+  }
+
+  while (blob.size > MAX_ANALYZE_UPLOAD_BYTES && Math.max(width, height) > 900) {
+    width = Math.max(1, Math.round(width * 0.85))
+    height = Math.max(1, Math.round(height * 0.85))
+    blob = await render()
+  }
+
+  if (blob.size > MAX_ANALYZE_UPLOAD_BYTES) {
+    throw new Error('IMAGE_TOO_LARGE')
+  }
+
+  return new File(
+    [blob],
+    file.name.replace(/\.[^.]+$/, '') + '.jpg',
+    { type: 'image/jpeg', lastModified: Date.now() }
+  )
+}
+
 export default function ScanPage() {
   const { data: session, status } = useSession()
   const [preview, setPreview] = useState<string | null>(null)
   const [file, setFile] = useState<File | null>(null)
+  const [preparing, setPreparing] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [mealType, setMealType] = useState('snack')
@@ -49,21 +132,62 @@ export default function ScanPage() {
 
   if (status === 'unauthenticated') redirect('/')
 
-  function handleFileSelect(f: File) {
-    setFile(f)
-    setAnalysis(null)
-    const url = URL.createObjectURL(f)
-    setPreview(url)
+  async function handleFileSelect(f: File) {
+    if (!f.type.startsWith('image/')) {
+      toast.error('กรุณาเลือกไฟล์รูปภาพ')
+      return
+    }
+
+    setPreparing(true)
+    try {
+      const optimized = await optimizeImageForAnalyze(f)
+      setFile(optimized)
+      setAnalysis(null)
+      setPreview(URL.createObjectURL(optimized))
+
+      if (optimized.size < f.size) {
+        toast.success(`ย่อรูปแล้ว: ${formatFileSize(f.size)} -> ${formatFileSize(optimized.size)}`)
+      }
+    } catch (error) {
+      console.error(error)
+      toast.error('รูปใหญ่เกินไป กรุณาเลือกรูปที่เล็กลงหรือครอปก่อนอัปโหลด')
+      setFile(null)
+      setPreview(null)
+      setAnalysis(null)
+    } finally {
+      setPreparing(false)
+    }
   }
 
   async function analyze() {
     if (!file) return
+    if (file.size > MAX_ANALYZE_UPLOAD_BYTES) {
+      toast.error('รูปยังใหญ่เกินไปสำหรับการวิเคราะห์')
+      return
+    }
+
     setAnalyzing(true)
     try {
       const formData = new FormData()
       formData.append('image', file)
       const res = await fetch('/api/food/analyze', { method: 'POST', body: formData })
-      const data = await res.json()
+
+      let data: { analysis?: Analysis; error?: string } = {}
+      try {
+        data = await res.json()
+      } catch {
+        data = {}
+      }
+
+      if (!res.ok) {
+        if (res.status === 413) {
+          toast.error('รูปใหญ่เกินไป กรุณาถ่ายใกล้ขึ้นหรือครอปรูปก่อน')
+          return
+        }
+        toast.error(data.error || 'วิเคราะห์ไม่สำเร็จ ลองใหม่อีกครั้ง')
+        return
+      }
+
       if (data.analysis) {
         setAnalysis(data.analysis)
         setMealType(data.analysis.meal_type_suggestion || 'snack')
@@ -151,7 +275,7 @@ export default function ScanPage() {
             {/* Image */}
             <div className="relative rounded-3xl overflow-hidden bg-black aspect-[4/3]">
               <img src={preview} alt="food" className="w-full h-full object-cover" />
-              {!analysis && !analyzing && (
+              {!analysis && !analyzing && !preparing && (
                 <div className="absolute bottom-4 left-4 right-4 flex gap-2">
                   <button
                     onClick={() => { setPreview(null); setFile(null) }}
@@ -167,6 +291,13 @@ export default function ScanPage() {
                   </button>
                 </div>
               )}
+              {preparing && (
+                <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-3">
+                  <div className="w-10 h-10 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <p className="text-white text-sm font-medium">กำลังเตรียมรูป...</p>
+                  <p className="text-white/60 text-xs">ย่อและบีบอัดรูปก่อนส่งวิเคราะห์</p>
+                </div>
+              )}
               {analyzing && (
                 <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-3">
                   <div className="w-10 h-10 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -175,6 +306,11 @@ export default function ScanPage() {
                 </div>
               )}
             </div>
+            {!analysis && file && (
+              <p className="text-xs text-gray-400 px-1">
+                รูปพร้อมส่งวิเคราะห์: {formatFileSize(file.size)}
+              </p>
+            )}
 
             {/* Analysis result */}
             {analysis && (
@@ -287,7 +423,10 @@ export default function ScanPage() {
         type="file"
         accept="image/*"
         className="hidden"
-        onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+        onChange={e => {
+          if (e.target.files?.[0]) handleFileSelect(e.target.files[0])
+          e.currentTarget.value = ''
+        }}
       />
       <input
         ref={cameraRef}
@@ -295,7 +434,10 @@ export default function ScanPage() {
         accept="image/*"
         capture="environment"
         className="hidden"
-        onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+        onChange={e => {
+          if (e.target.files?.[0]) handleFileSelect(e.target.files[0])
+          e.currentTarget.value = ''
+        }}
       />
     </div>
   )

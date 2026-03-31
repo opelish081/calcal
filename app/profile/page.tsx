@@ -28,6 +28,10 @@ export default function ProfilePage() {
   async function fetchData() {
     const res = await fetch('/api/goals')
     const data = await res.json()
+    if (!res.ok) {
+      toast.error(data.error || 'โหลดข้อมูลโปรไฟล์ไม่สำเร็จ')
+      return
+    }
     setProfile(data.profile)
     setProgram(data.program)
     if (data.profile) {
@@ -50,19 +54,20 @@ export default function ProfilePage() {
       body: JSON.stringify({
         weight_kg: parseFloat(weight),
         height_cm: parseFloat(height),
-        age: parseInt(age),
+        age: parseInt(age, 10),
         gender,
         program_type: activity,
         goal,
         quiz_answers: { weight, height, age, gender, activity, goal },
       }),
     })
+    const data = await res.json()
     if (res.ok) {
       toast.success('อัปเดตแล้ว!')
       setEditMode(false)
       fetchData()
     } else {
-      toast.error('เกิดข้อผิดพลาด')
+      toast.error(data.error || 'เกิดข้อผิดพลาด')
     }
     setSaving(false)
   }
