@@ -1,16 +1,17 @@
 -- =============================================
--- CalCal — Supabase Schema
--- Run this in Supabase SQL Editor
+-- CalCal — Supabase Schema (Latest Snapshot)
+-- Use this file for a fresh database.
+-- For an existing database, apply only the next file in supabase/migrations/.
 -- =============================================
 
 -- Enable UUID extension
 create extension if not exists "uuid-ossp";
 
 -- =============================================
--- USERS (extends NextAuth users via adapter)
+-- USERS (managed by NextAuth / app layer)
 -- =============================================
 create table if not exists public.user_profiles (
-  id          uuid references auth.users on delete cascade primary key,
+  id          uuid primary key,
   email       text unique not null,
   name        text,
   avatar_url  text,
@@ -29,12 +30,21 @@ create table if not exists public.user_profiles (
 -- =============================================
 -- PROGRAMS (user nutrition goals)
 -- =============================================
-create type program_type as enum (
-  'sedentary',       -- desk job, no exercise
-  'light_active',    -- light exercise 1-3 days/week
-  'moderate_active', -- gym 3-5 days/week
-  'very_active'      -- athlete / hard training daily
-);
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_type
+    where typname = 'program_type'
+  ) then
+    create type program_type as enum (
+      'sedentary',       -- desk job, no exercise
+      'light_active',    -- light exercise 1-3 days/week
+      'moderate_active', -- gym 3-5 days/week
+      'very_active'      -- athlete / hard training daily
+    );
+  end if;
+end $$;
 
 create table if not exists public.user_programs (
   id              uuid primary key default uuid_generate_v4(),
@@ -59,7 +69,8 @@ create table if not exists public.user_programs (
 );
 
 -- Only one active program per user
-create unique index on public.user_programs (user_id) where is_active = true;
+create unique index if not exists user_programs_one_active_idx
+  on public.user_programs (user_id) where is_active = true;
 
 -- =============================================
 -- FOOD LOGS
@@ -85,7 +96,8 @@ create table if not exists public.food_logs (
   created_at  timestamptz default now()
 );
 
-create index on public.food_logs (user_id, logged_at);
+create index if not exists food_logs_user_logged_at_idx
+  on public.food_logs (user_id, logged_at);
 
 -- =============================================
 -- DAILY SUMMARIES (computed/cached)
@@ -130,6 +142,12 @@ alter table public.daily_summaries     enable row level security;
 alter table public.ai_recommendations  enable row level security;
 
 -- Policies: users can only access their own data
+drop policy if exists "own profile" on public.user_profiles;
+drop policy if exists "own programs" on public.user_programs;
+drop policy if exists "own logs" on public.food_logs;
+drop policy if exists "own summaries" on public.daily_summaries;
+drop policy if exists "own recs" on public.ai_recommendations;
+
 create policy "own profile" on public.user_profiles      for all using (auth.uid() = id);
 create policy "own programs" on public.user_programs     for all using (auth.uid() = user_id);
 create policy "own logs" on public.food_logs             for all using (auth.uid() = user_id);
@@ -137,6 +155,9 @@ create policy "own summaries" on public.daily_summaries  for all using (auth.uid
 create policy "own recs" on public.ai_recommendations    for all using (auth.uid() = user_id);
 
 -- Service role bypass for LINE webhook
+drop policy if exists "service role bypass" on public.user_profiles;
+drop policy if exists "service role logs" on public.food_logs;
+
 create policy "service role bypass" on public.user_profiles
   for all using (auth.role() = 'service_role');
 create policy "service role logs" on public.food_logs
@@ -147,28 +168,50 @@ create policy "service role logs" on public.food_logs
 -- =============================================
 create or replace function public.update_daily_summary()
 returns trigger language plpgsql as $$
+declare
+  target_user_id uuid;
+  target_date date;
 begin
-  insert into public.daily_summaries (user_id, summary_date, total_calories, total_protein_g, total_carbs_g, total_fat_g)
-  select
-    NEW.user_id,
-    NEW.logged_at,
-    coalesce(sum(calories), 0),
-    coalesce(sum(protein_g), 0),
-    coalesce(sum(carbs_g), 0),
-    coalesce(sum(fat_g), 0)
-  from public.food_logs
-  where user_id = NEW.user_id and logged_at = NEW.logged_at
-  on conflict (user_id, summary_date)
-  do update set
-    total_calories  = excluded.total_calories,
-    total_protein_g = excluded.total_protein_g,
-    total_carbs_g   = excluded.total_carbs_g,
-    total_fat_g     = excluded.total_fat_g,
-    updated_at      = now();
-  return NEW;
+  if TG_OP = 'DELETE' then
+    target_user_id := OLD.user_id;
+    target_date := OLD.logged_at;
+  else
+    target_user_id := NEW.user_id;
+    target_date := NEW.logged_at;
+  end if;
+
+  if exists (
+    select 1
+    from public.food_logs
+    where user_id = target_user_id and logged_at = target_date
+  ) then
+    insert into public.daily_summaries (user_id, summary_date, total_calories, total_protein_g, total_carbs_g, total_fat_g)
+    select
+      target_user_id,
+      target_date,
+      coalesce(sum(calories), 0),
+      coalesce(sum(protein_g), 0),
+      coalesce(sum(carbs_g), 0),
+      coalesce(sum(fat_g), 0)
+    from public.food_logs
+    where user_id = target_user_id and logged_at = target_date
+    on conflict (user_id, summary_date)
+    do update set
+      total_calories  = excluded.total_calories,
+      total_protein_g = excluded.total_protein_g,
+      total_carbs_g   = excluded.total_carbs_g,
+      total_fat_g     = excluded.total_fat_g,
+      updated_at      = now();
+  else
+    delete from public.daily_summaries
+    where user_id = target_user_id and summary_date = target_date;
+  end if;
+
+  return coalesce(NEW, OLD);
 end;
 $$;
 
+drop trigger if exists after_food_log on public.food_logs;
 create trigger after_food_log
   after insert or update or delete on public.food_logs
   for each row execute function public.update_daily_summary();
