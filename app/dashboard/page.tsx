@@ -3,8 +3,9 @@ import { useSession } from 'next-auth/react'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { addDays, format, isToday, parseISO } from 'date-fns'
+import { format, isToday, parseISO } from 'date-fns'
 import { th } from 'date-fns/locale'
+import DateCalendar from '@/components/common/DateCalendar'
 import MacroRing from '@/components/dashboard/MacroRing'
 import MealList from '@/components/dashboard/MealList'
 import WeeklyChart from '@/components/dashboard/WeeklyChart'
@@ -64,10 +65,6 @@ export default function DashboardPage() {
     }
     if (status === 'authenticated') void fetchAll()
   }, [status, selectedDate, router])
-
-  function shiftSelectedDate(days: number) {
-    setSelectedDate((current) => format(addDays(parseISO(current), days), 'yyyy-MM-dd'))
-  }
 
   async function fetchAll() {
     setLoading(true)
@@ -160,53 +157,13 @@ export default function DashboardPage() {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-5 pb-32">
-        <div className="card">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs text-gray-400">เลือกวันที่</p>
-              <p className="text-sm font-medium text-gray-900">
-                {viewingToday ? 'วันนี้' : format(selectedDateValue, 'EEEE, d MMMM', { locale: th })}
-              </p>
-            </div>
-            {!viewingToday && (
-              <button
-                onClick={() => setSelectedDate(todayStr)}
-                className="text-xs text-gray-500 bg-gray-100 rounded-lg px-3 py-2 hover:bg-gray-200 transition-all"
-              >
-                กลับมาวันนี้
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2 mt-4">
-            <button
-              onClick={() => shiftSelectedDate(-1)}
-              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all"
-              aria-label="วันก่อนหน้า"
-            >
-              ←
-            </button>
-            <input
-              type="date"
-              value={selectedDate}
-              max={todayStr}
-              onChange={(e) => {
-                if (e.target.value) setSelectedDate(e.target.value)
-              }}
-              className="input-base flex-1"
-            />
-            <button
-              onClick={() => shiftSelectedDate(1)}
-              disabled={selectedDate === todayStr}
-              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              aria-label="วันถัดไป"
-            >
-              →
-            </button>
-          </div>
-          <p className="text-xs text-gray-400 mt-3">
-            ดูย้อนหลังได้ทั้งรายการอาหาร แคลอรี่ และกราฟ 7 วันที่สิ้นสุดที่วันเลือก
-          </p>
-        </div>
+        <DateCalendar
+          label="เลือกวันที่"
+          selectedDate={selectedDate}
+          maxDate={todayStr}
+          onSelect={setSelectedDate}
+          helperText="แตะวันที่บนปฏิทินเพื่อดูอาหาร แคลอรี่ และกราฟย้อนหลังทันที"
+        />
 
         {/* Calorie summary card */}
         <div className="card">

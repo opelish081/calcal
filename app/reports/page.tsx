@@ -2,8 +2,9 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
-import { addDays, format, isToday, parseISO } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 import { th } from 'date-fns/locale'
+import DateCalendar from '@/components/common/DateCalendar'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 interface Summary {
@@ -33,10 +34,6 @@ export default function ReportsPage() {
   useEffect(() => {
     if (status === 'authenticated') void fetchData()
   }, [status, range, selectedDate])
-
-  function shiftSelectedDate(days: number) {
-    setSelectedDate((current) => format(addDays(parseISO(current), days), 'yyyy-MM-dd'))
-  }
 
   async function fetchData() {
     setLoading(true)
@@ -75,50 +72,13 @@ export default function ReportsPage() {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-5 pb-16">
-        <div className="card">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs text-gray-400">สิ้นสุดที่วันที่</p>
-              <p className="text-sm font-medium text-gray-900">
-                {isToday(parseISO(selectedDate)) ? 'วันนี้' : format(parseISO(selectedDate), 'EEEE, d MMMM', { locale: th })}
-              </p>
-            </div>
-            {selectedDate !== todayStr && (
-              <button
-                onClick={() => setSelectedDate(todayStr)}
-                className="text-xs text-gray-500 bg-gray-100 rounded-lg px-3 py-2 hover:bg-gray-200 transition-all"
-              >
-                กลับมาวันนี้
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2 mt-4">
-            <button
-              onClick={() => shiftSelectedDate(-1)}
-              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all"
-              aria-label="วันก่อนหน้า"
-            >
-              ←
-            </button>
-            <input
-              type="date"
-              value={selectedDate}
-              max={todayStr}
-              onChange={(e) => {
-                if (e.target.value) setSelectedDate(e.target.value)
-              }}
-              className="input-base flex-1"
-            />
-            <button
-              onClick={() => shiftSelectedDate(1)}
-              disabled={selectedDate === todayStr}
-              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              aria-label="วันถัดไป"
-            >
-              →
-            </button>
-          </div>
-        </div>
+        <DateCalendar
+          label="สิ้นสุดที่วันที่"
+          selectedDate={selectedDate}
+          maxDate={todayStr}
+          onSelect={setSelectedDate}
+          helperText="เลือกวันปลายช่วงรายงาน แล้วกราฟจะอัปเดตตามวันนั้นทันที"
+        />
 
         {/* Stats cards */}
         {stats && (
