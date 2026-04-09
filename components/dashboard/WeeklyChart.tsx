@@ -9,7 +9,15 @@ interface DayData {
   total_calories: number
 }
 
-export default function WeeklyChart({ data, proteinTarget }: { data: DayData[]; proteinTarget: number }) {
+export default function WeeklyChart({
+  data,
+  proteinTarget,
+  focusDate,
+}: {
+  data: DayData[]
+  proteinTarget: number
+  focusDate?: string
+}) {
   const chartData = data.map(d => ({
     day: format(parseISO(d.summary_date), 'EEE', { locale: th }),
     protein: Math.round(d.total_protein_g),
@@ -17,7 +25,7 @@ export default function WeeklyChart({ data, proteinTarget }: { data: DayData[]; 
     date: d.summary_date,
   }))
 
-  const today = format(new Date(), 'yyyy-MM-dd')
+  const highlightedDate = focusDate || format(new Date(), 'yyyy-MM-dd')
 
   return (
     <div className="space-y-4">
@@ -43,7 +51,7 @@ export default function WeeklyChart({ data, proteinTarget }: { data: DayData[]; 
               {chartData.map((entry) => (
                 <Cell
                   key={entry.date}
-                  fill={entry.protein >= proteinTarget ? '#22c55e' : entry.date === today ? '#111827' : '#e5e7eb'}
+                  fill={entry.protein >= proteinTarget ? '#22c55e' : entry.date === highlightedDate ? '#111827' : '#e5e7eb'}
                 />
               ))}
             </Bar>
@@ -72,7 +80,7 @@ export default function WeeklyChart({ data, proteinTarget }: { data: DayData[]; 
               {chartData.map((entry) => (
                 <Cell
                   key={entry.date}
-                  fill={entry.date === today ? '#f59e0b' : '#fef3c7'}
+                  fill={entry.date === highlightedDate ? '#f59e0b' : '#fef3c7'}
                 />
               ))}
             </Bar>

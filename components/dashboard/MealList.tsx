@@ -28,7 +28,17 @@ const SOURCE_BADGE: Record<string, string> = {
   search: '',
 }
 
-export default function MealList({ logs, onDelete }: { logs: FoodLog[]; onDelete: () => void }) {
+export default function MealList({
+  logs,
+  onDelete,
+  dateLabel,
+  isToday = true,
+}: {
+  logs: FoodLog[]
+  onDelete: () => void
+  dateLabel?: string
+  isToday?: boolean
+}) {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [editingLog, setEditingLog] = useState<FoodLog | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
@@ -114,7 +124,9 @@ export default function MealList({ logs, onDelete }: { logs: FoodLog[]; onDelete
     return (
       <div className="card text-center py-8">
         <p className="text-3xl mb-2">🍽️</p>
-        <p className="text-sm text-gray-400">ยังไม่มีรายการอาหารวันนี้</p>
+        <p className="text-sm text-gray-400">
+          {isToday ? 'ยังไม่มีรายการอาหารวันนี้' : `ยังไม่มีรายการอาหารวันที่ ${dateLabel}`}
+        </p>
         <p className="text-xs text-gray-300 mt-1">กด + บันทึกอาหาร หรือถ่ายรูปเพื่อเพิ่ม</p>
       </div>
     )
@@ -132,7 +144,9 @@ export default function MealList({ logs, onDelete }: { logs: FoodLog[]; onDelete
 
   return (
     <div className="card space-y-4">
-      <h2 className="text-sm font-medium text-gray-900">รายการอาหารวันนี้</h2>
+      <h2 className="text-sm font-medium text-gray-900">
+        {isToday ? 'รายการอาหารวันนี้' : `รายการอาหารวันที่ ${dateLabel}`}
+      </h2>
       {mealOrder.filter(m => grouped[m]).map(meal => (
         <div key={meal}>
           <p className="text-xs font-medium text-gray-400 mb-2">{MEAL_LABELS[meal]}</p>

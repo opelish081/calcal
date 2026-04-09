@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
-import { format, parseISO } from 'date-fns'
+import { addDays, format, isToday, parseISO } from 'date-fns'
 import { th } from 'date-fns/locale'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
@@ -23,18 +23,24 @@ interface Stats {
 
 export default function ReportsPage() {
   const { status } = useSession()
+  const todayStr = format(new Date(), 'yyyy-MM-dd')
   const [range, setRange] = useState(7)
+  const [selectedDate, setSelectedDate] = useState(todayStr)
   const [summaries, setSummaries] = useState<Summary[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (status === 'authenticated') fetchData()
-  }, [status, range])
+    if (status === 'authenticated') void fetchData()
+  }, [status, range, selectedDate])
+
+  function shiftSelectedDate(days: number) {
+    setSelectedDate((current) => format(addDays(parseISO(current), days), 'yyyy-MM-dd'))
+  }
 
   async function fetchData() {
     setLoading(true)
-    const res = await fetch(`/api/reports?range=${range}`)
+    const res = await fetch(`/api/reports?range=${range}&endDate=${selectedDate}`)
     const data = await res.json()
     setSummaries(data.summaries || [])
     setStats(data.stats)
@@ -69,6 +75,51 @@ export default function ReportsPage() {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-5 pb-16">
+        <div className="card">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-400">สิ้นสุดที่วันที่</p>
+              <p className="text-sm font-medium text-gray-900">
+                {isToday(parseISO(selectedDate)) ? 'วันนี้' : format(parseISO(selectedDate), 'EEEE, d MMMM', { locale: th })}
+              </p>
+            </div>
+            {selectedDate !== todayStr && (
+              <button
+                onClick={() => setSelectedDate(todayStr)}
+                className="text-xs text-gray-500 bg-gray-100 rounded-lg px-3 py-2 hover:bg-gray-200 transition-all"
+              >
+                กลับมาวันนี้
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-4">
+            <button
+              onClick={() => shiftSelectedDate(-1)}
+              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all"
+              aria-label="วันก่อนหน้า"
+            >
+              ←
+            </button>
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayStr}
+              onChange={(e) => {
+                if (e.target.value) setSelectedDate(e.target.value)
+              }}
+              className="input-base flex-1"
+            />
+            <button
+              onClick={() => shiftSelectedDate(1)}
+              disabled={selectedDate === todayStr}
+              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label="วันถัดไป"
+            >
+              →
+            </button>
+          </div>
+        </div>
+
         {/* Stats cards */}
         {stats && (
           <div className="grid grid-cols-3 gap-3">
@@ -90,7 +141,9 @@ export default function ReportsPage() {
         {/* Protein chart */}
         <div className="card">
           <h2 className="text-sm font-medium text-gray-900 mb-1">โปรตีน (g)</h2>
-          <p className="text-xs text-gray-400 mb-4">{range} วันที่ผ่านมา</p>
+          <p className="text-xs text-gray-400 mb-4">
+            {range} วันย้อนหลัง สิ้นสุดที่ {format(parseISO(selectedDate), 'd MMM yyyy', { locale: th })}
+          </p>
           {!loading && (
             <ResponsiveContainer width="100%" height={160}>
               <AreaChart data={chartData}>
@@ -122,7 +175,9 @@ export default function ReportsPage() {
         {/* Calories chart */}
         <div className="card">
           <h2 className="text-sm font-medium text-gray-900 mb-1">แคลอรี่ (kcal)</h2>
-          <p className="text-xs text-gray-400 mb-4">{range} วันที่ผ่านมา</p>
+          <p className="text-xs text-gray-400 mb-4">
+            {range} วันย้อนหลัง สิ้นสุดที่ {format(parseISO(selectedDate), 'd MMM yyyy', { locale: th })}
+          </p>
           {!loading && (
             <ResponsiveContainer width="100%" height={140}>
               <AreaChart data={chartData}>

@@ -30,7 +30,15 @@ function guessCurrentMeal(): string {
   return 'snack'
 }
 
-export default function QuickLog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+export default function QuickLog({
+  onClose,
+  onSaved,
+  loggedAt,
+}: {
+  onClose: () => void
+  onSaved: () => void
+  loggedAt?: string
+}) {
   const [mode, setMode] = useState<'quick' | 'manual'>('quick')
   const [mealType, setMealType] = useState(guessCurrentMeal())
   const [saving, setSaving] = useState(false)
@@ -50,7 +58,7 @@ export default function QuickLog({ onClose, onSaved }: { onClose: () => void; on
     const res = await fetch('/api/food/log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...food, meal_type: mealType, source: 'manual' }),
+      body: JSON.stringify({ ...food, meal_type: mealType, source: 'manual', logged_at: loggedAt }),
     })
     if (res.ok) {
       toast.success('บันทึกแล้ว! 🎉')

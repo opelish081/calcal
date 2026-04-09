@@ -26,6 +26,7 @@ export default function OnboardingPage() {
   const router = useRouter()
 
   const [step, setStep] = useState<Step>('body')
+  const [bootstrapping, setBootstrapping] = useState(true)
   const [saving, setSaving] = useState(false)
   const [weight, setWeight] = useState('')
   const [height, setHeight] = useState('')
@@ -37,10 +38,53 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.replace('/auth/signin')
+      return
+    }
+
+    if (status !== 'authenticated') return
+
+    let cancelled = false
+
+    async function bootstrapForm() {
+      setBootstrapping(true)
+
+      try {
+        const res = await fetch('/api/goals', { cache: 'no-store' })
+        const data = await res.json().catch(() => ({}))
+
+        if (cancelled) return
+
+        if (res.ok) {
+          if (data.onboardingComplete) {
+            router.replace('/dashboard')
+            return
+          }
+
+          if (data.profile) {
+            setWeight(String(data.profile.weight_kg || ''))
+            setHeight(String(data.profile.height_cm || ''))
+            setAge(String(data.profile.age || ''))
+            setGender(data.profile.gender === 'female' ? 'female' : 'male')
+          }
+
+          if (data.program) {
+            setActivity((data.program.program_type as ActivityLevel) || 'light_active')
+            setGoal((data.program.goal as Goal) || 'maintain')
+          }
+        }
+      } finally {
+        if (!cancelled) setBootstrapping(false)
+      }
+    }
+
+    void bootstrapForm()
+
+    return () => {
+      cancelled = true
     }
   }, [status, router])
 
-  if (status === 'loading' || status === 'unauthenticated') {
+  if (status === 'loading' || status === 'unauthenticated' || bootstrapping) {
     return <div className="min-h-screen flex items-center justify-center text-sm text-gray-400">กำลังโหลด...</div>
   }
 

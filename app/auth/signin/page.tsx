@@ -1,15 +1,55 @@
 'use client'
 import { signIn, useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 export default function SignInPage() {
-  const { data: session } = useSession()
+  const { data: session, status } = useSession()
   const router = useRouter()
+  const [routingAfterLogin, setRoutingAfterLogin] = useState(false)
 
   useEffect(() => {
-    if (session) router.push('/dashboard')
+    if (!session) {
+      setRoutingAfterLogin(false)
+      return
+    }
+
+    let cancelled = false
+
+    async function routeSignedInUser() {
+      setRoutingAfterLogin(true)
+
+      try {
+        const res = await fetch('/api/goals', { cache: 'no-store' })
+        const data = await res.json().catch(() => ({}))
+
+        if (cancelled) return
+
+        if (!res.ok) {
+          router.replace('/onboarding')
+          return
+        }
+
+        router.replace(data.onboardingComplete ? '/dashboard' : '/onboarding')
+      } catch {
+        if (!cancelled) router.replace('/onboarding')
+      }
+    }
+
+    void routeSignedInUser()
+
+    return () => {
+      cancelled = true
+    }
   }, [session, router])
+
+  if (status === 'loading' || routingAfterLogin) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center px-6">
+        <p className="text-sm text-gray-400">กำลังพาไปหน้าถัดไป...</p>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
@@ -21,7 +61,7 @@ export default function SignInPage() {
 
         <div className="space-y-3">
           <button
-            onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
+            onClick={() => signIn('google', { callbackUrl: '/auth/signin' })}
             className="w-full flex items-center justify-center gap-3 py-4 px-6 border border-gray-200 rounded-2xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-all"
           >
             <svg width="18" height="18" viewBox="0 0 18 18">

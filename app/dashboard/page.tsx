@@ -1,9 +1,9 @@
 'use client'
 import { useSession } from 'next-auth/react'
 import { useEffect, useState } from 'react'
-import { redirect } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { format } from 'date-fns'
+import { addDays, format, isToday, parseISO } from 'date-fns'
 import { th } from 'date-fns/locale'
 import MacroRing from '@/components/dashboard/MacroRing'
 import MealList from '@/components/dashboard/MealList'
@@ -36,10 +36,13 @@ interface FoodLog {
   fat_g: number
   meal_type: string
   logged_at: string
+  source?: string
+  amount_g?: number | null
 }
 
 export default function DashboardPage() {
   const { data: session, status } = useSession()
+  const router = useRouter()
   const [summary, setSummary] = useState<DailySummary | null>(null)
   const [program, setProgram] = useState<Program | null>(null)
   const [logs, setLogs] = useState<FoodLog[]>([])
@@ -49,40 +52,65 @@ export default function DashboardPage() {
 
   const today = new Date()
   const todayStr = format(today, 'yyyy-MM-dd')
+  const [selectedDate, setSelectedDate] = useState(todayStr)
+  const selectedDateValue = parseISO(selectedDate)
+  const viewingToday = isToday(selectedDateValue)
+  const selectedDateLabel = format(selectedDateValue, 'd MMMM', { locale: th })
 
   useEffect(() => {
-    if (status === 'unauthenticated') redirect('/')
-    if (status === 'authenticated') fetchAll()
-  }, [status])
+    if (status === 'unauthenticated') {
+      router.replace('/auth/signin')
+      return
+    }
+    if (status === 'authenticated') void fetchAll()
+  }, [status, selectedDate, router])
+
+  function shiftSelectedDate(days: number) {
+    setSelectedDate((current) => format(addDays(parseISO(current), days), 'yyyy-MM-dd'))
+  }
 
   async function fetchAll() {
     setLoading(true)
     try {
       const [goalsRes, logsRes, reportsRes] = await Promise.all([
-        fetch('/api/goals'),
-        fetch(`/api/food/log?date=${todayStr}`),
-        fetch('/api/reports?range=7'),
+        fetch('/api/goals', { cache: 'no-store' }),
+        fetch(`/api/food/log?date=${selectedDate}`),
+        fetch(`/api/reports?range=7&endDate=${selectedDate}`),
       ])
-      const goalsData = await goalsRes.json()
-      const logsData = await logsRes.json()
-      const reportsData = await reportsRes.json()
 
-      if (!goalsData.program) {
-        redirect('/onboarding')
+      const goalsData = await goalsRes.json().catch(() => ({}))
+      if (goalsRes.status === 401) {
+        router.replace('/auth/signin')
         return
+      }
+      if (!goalsRes.ok) {
+        throw new Error(goalsData.error || 'โหลดข้อมูลเป้าหมายไม่สำเร็จ')
+      }
+      if (!goalsData.onboardingComplete) {
+        router.replace('/onboarding')
+        return
+      }
+
+      const logsData = await logsRes.json().catch(() => ({}))
+      const reportsData = await reportsRes.json().catch(() => ({}))
+
+      if (!logsRes.ok) {
+        throw new Error(logsData.error || 'โหลดรายการอาหารไม่สำเร็จ')
+      }
+      if (!reportsRes.ok) {
+        throw new Error(reportsData.error || 'โหลดรายงานไม่สำเร็จ')
       }
 
       setProgram(goalsData.program)
       setLogs(logsData.logs || [])
       setWeeklyData(reportsData.summaries || [])
 
-      // Compute today's summary from logs
-      const todayLogs = logsData.logs || []
+      const selectedLogs = logsData.logs || []
       setSummary({
-        total_calories: todayLogs.reduce((s: number, l: FoodLog) => s + (l.calories || 0), 0),
-        total_protein_g: todayLogs.reduce((s: number, l: FoodLog) => s + (l.protein_g || 0), 0),
-        total_carbs_g: todayLogs.reduce((s: number, l: FoodLog) => s + (l.carbs_g || 0), 0),
-        total_fat_g: todayLogs.reduce((s: number, l: FoodLog) => s + (l.fat_g || 0), 0),
+        total_calories: selectedLogs.reduce((s: number, l: FoodLog) => s + (l.calories || 0), 0),
+        total_protein_g: selectedLogs.reduce((s: number, l: FoodLog) => s + (l.protein_g || 0), 0),
+        total_carbs_g: selectedLogs.reduce((s: number, l: FoodLog) => s + (l.carbs_g || 0), 0),
+        total_fat_g: selectedLogs.reduce((s: number, l: FoodLog) => s + (l.fat_g || 0), 0),
       })
     } catch (e) {
       console.error(e)
@@ -111,7 +139,7 @@ export default function DashboardPage() {
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
           <div>
             <p className="text-xs text-gray-400 capitalize">
-              {format(today, 'EEEE, d MMMM', { locale: th })}
+              {format(selectedDateValue, 'EEEE, d MMMM', { locale: th })}
             </p>
             <h1 className="text-base font-medium text-gray-900">
               สวัสดี, {session?.user?.name?.split(' ')[0] || 'คุณ'} 👋
@@ -132,10 +160,65 @@ export default function DashboardPage() {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-5 pb-32">
+        <div className="card">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-400">เลือกวันที่</p>
+              <p className="text-sm font-medium text-gray-900">
+                {viewingToday ? 'วันนี้' : format(selectedDateValue, 'EEEE, d MMMM', { locale: th })}
+              </p>
+            </div>
+            {!viewingToday && (
+              <button
+                onClick={() => setSelectedDate(todayStr)}
+                className="text-xs text-gray-500 bg-gray-100 rounded-lg px-3 py-2 hover:bg-gray-200 transition-all"
+              >
+                กลับมาวันนี้
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-4">
+            <button
+              onClick={() => shiftSelectedDate(-1)}
+              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all"
+              aria-label="วันก่อนหน้า"
+            >
+              ←
+            </button>
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayStr}
+              onChange={(e) => {
+                if (e.target.value) setSelectedDate(e.target.value)
+              }}
+              className="input-base flex-1"
+            />
+            <button
+              onClick={() => shiftSelectedDate(1)}
+              disabled={selectedDate === todayStr}
+              className="w-10 h-10 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label="วันถัดไป"
+            >
+              →
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-3">
+            ดูย้อนหลังได้ทั้งรายการอาหาร แคลอรี่ และกราฟ 7 วันที่สิ้นสุดที่วันเลือก
+          </p>
+        </div>
+
         {/* Calorie summary card */}
         <div className="card">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-medium text-gray-500">แคลอรี่วันนี้</h2>
+            <div>
+              <h2 className="text-sm font-medium text-gray-500">
+                {viewingToday ? 'แคลอรี่วันนี้' : 'แคลอรี่ย้อนหลัง'}
+              </h2>
+              {!viewingToday && (
+                <p className="text-xs text-gray-400 mt-1">{selectedDateLabel}</p>
+              )}
+            </div>
             <span className="text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1">
               เป้า {calTarget.toLocaleString()} kcal
             </span>
@@ -157,12 +240,13 @@ export default function DashboardPage() {
           </div>
           {remaining > 0 && (
             <p className="text-xs text-gray-400 mt-3 pt-3 border-t border-gray-100">
-              เหลืออีก <span className="font-medium text-gray-700">{Math.round(remaining)} kcal</span> จะถึงเป้าหมายวันนี้
+              เหลืออีก <span className="font-medium text-gray-700">{Math.round(remaining)} kcal</span>{' '}
+              {viewingToday ? 'จะถึงเป้าหมายวันนี้' : `จะถึงเป้าหมายวันที่ ${selectedDateLabel}`}
             </p>
           )}
           {remaining === 0 && (
             <p className="text-xs text-brand-600 mt-3 pt-3 border-t border-gray-100 font-medium">
-              ✅ ถึงเป้าหมายแคลอรี่วันนี้แล้ว!
+              {viewingToday ? '✅ ถึงเป้าหมายแคลอรี่วันนี้แล้ว!' : `✅ ถึงเป้าหมายแคลอรี่วันที่ ${selectedDateLabel} แล้ว!`}
             </p>
           )}
         </div>
@@ -170,7 +254,9 @@ export default function DashboardPage() {
         {/* Protein highlight */}
         <div className={`rounded-2xl p-4 flex items-center justify-between ${protein >= proteinTarget ? 'bg-brand-50 border border-brand-100' : 'bg-blue-50 border border-blue-100'}`}>
           <div>
-            <p className="text-xs text-blue-600 font-medium mb-0.5">โปรตีนวันนี้</p>
+            <p className="text-xs text-blue-600 font-medium mb-0.5">
+              {viewingToday ? 'โปรตีนวันนี้' : `โปรตีนวันที่ ${selectedDateLabel}`}
+            </p>
             <p className="text-2xl font-medium text-gray-900">{Math.round(protein)}<span className="text-sm font-normal text-gray-400">g</span></p>
             <p className="text-xs text-gray-400">เป้า {proteinTarget}g</p>
           </div>
@@ -185,12 +271,20 @@ export default function DashboardPage() {
         </div>
 
         {/* Meals logged */}
-        <MealList logs={logs} onDelete={fetchAll} />
+        <MealList
+          logs={logs}
+          onDelete={fetchAll}
+          dateLabel={selectedDateLabel}
+          isToday={viewingToday}
+        />
 
         {/* Weekly chart */}
         <div className="card">
-          <h2 className="text-sm font-medium text-gray-900 mb-4">7 วันที่ผ่านมา</h2>
-          <WeeklyChart data={weeklyData} proteinTarget={proteinTarget} />
+          <h2 className="text-sm font-medium text-gray-900 mb-1">7 วันที่ย้อนหลัง</h2>
+          <p className="text-xs text-gray-400 mb-4">
+            สิ้นสุดที่ {viewingToday ? 'วันนี้' : format(selectedDateValue, 'd MMMM yyyy', { locale: th })}
+          </p>
+          <WeeklyChart data={weeklyData} proteinTarget={proteinTarget} focusDate={selectedDate} />
         </div>
 
         {/* Quick add button */}
@@ -219,6 +313,7 @@ export default function DashboardPage() {
         <QuickLog
           onClose={() => setShowQuickLog(false)}
           onSaved={() => { setShowQuickLog(false); fetchAll() }}
+          loggedAt={selectedDate}
         />
       )}
     </div>

@@ -1,5 +1,6 @@
 import { NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
+import { isProfileComplete } from '@/lib/onboarding'
 import { ensureUserProfile, findUserProfile, isUuid } from '@/lib/user-profile'
 
 export const authOptions: NextAuthOptions = {
@@ -32,7 +33,7 @@ export const authOptions: NextAuthOptions = {
           const profile = await findUserProfile({ id: token.sub, email: token.email })
           if (profile) {
             session.user.id = profile.id
-            session.user.profileComplete = !!(profile.weight_kg && profile.height_cm && profile.age)
+            session.user.profileComplete = isProfileComplete(profile)
           } else if (token.sub) {
             session.user.id = token.sub
           }

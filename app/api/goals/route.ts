@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { isOnboardingComplete, isProfileComplete, isProgramComplete } from '@/lib/onboarding'
 import { supabaseAdmin } from '@/lib/supabase'
 import { calculateTargets, type ActivityLevel, type Goal } from '@/lib/nutrition'
 import { ensureUserProfile, findUserProfile } from '@/lib/user-profile'
@@ -17,7 +18,13 @@ export async function GET(req: NextRequest) {
     const profile = await findUserProfile({ id: session.user.id, email: session.user.email })
 
     if (!profile) {
-      return NextResponse.json({ profile: null, program: null })
+      return NextResponse.json({
+        profile: null,
+        program: null,
+        profileComplete: false,
+        programComplete: false,
+        onboardingComplete: false,
+      })
     }
 
     const { data: program, error: programError } = await supabaseAdmin
@@ -31,7 +38,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: programError.message }, { status: 500 })
     }
 
-    return NextResponse.json({ profile, program })
+    const profileComplete = isProfileComplete(profile)
+    const programComplete = isProgramComplete(program)
+
+    return NextResponse.json({
+      profile,
+      program,
+      profileComplete,
+      programComplete,
+      onboardingComplete: isOnboardingComplete(profile, program),
+    })
   } catch (error) {
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
   }
@@ -99,7 +115,13 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json({ program, targets })
+    return NextResponse.json({
+      program,
+      targets,
+      profileComplete: true,
+      programComplete: true,
+      onboardingComplete: true,
+    })
   } catch (error) {
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
   }

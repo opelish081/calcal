@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin, type Database } from '@/lib/supabase'
-import { subDays, format } from 'date-fns'
+import { subDays, format, parseISO, isValid } from 'date-fns'
 
 type DailySummary = Database['public']['Tables']['daily_summaries']['Row']
 type ReportSummary = Pick<DailySummary, 'summary_date' | 'total_calories' | 'total_protein_g' | 'total_carbs_g' | 'total_fat_g'>
@@ -14,9 +14,13 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const range = searchParams.get('range') || '7' // days
   const days = parseInt(range, 10)
+  const endDateParam = searchParams.get('endDate')
+  const endDateBase = endDateParam && isValid(parseISO(endDateParam))
+    ? parseISO(endDateParam)
+    : new Date()
 
-  const startDate = format(subDays(new Date(), days - 1), 'yyyy-MM-dd')
-  const endDate = format(new Date(), 'yyyy-MM-dd')
+  const startDate = format(subDays(endDateBase, days - 1), 'yyyy-MM-dd')
+  const endDate = format(endDateBase, 'yyyy-MM-dd')
 
   const { data: summaries, error } = await supabaseAdmin
     .from('daily_summaries')
@@ -33,7 +37,7 @@ export async function GET(req: NextRequest) {
   // Fill missing days with zeros
   const filled: ReportSummary[] = []
   for (let i = days - 1; i >= 0; i--) {
-    const date = format(subDays(new Date(), i), 'yyyy-MM-dd')
+    const date = format(subDays(endDateBase, i), 'yyyy-MM-dd')
     const found = typedSummaries.find((s) => s.summary_date === date)
     filled.push(found || {
       summary_date: date,
