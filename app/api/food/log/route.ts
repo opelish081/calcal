@@ -15,6 +15,23 @@ type SummaryAccumulator = {
   fat_g: number
 }
 
+type HistoryLogRow = {
+  food_name: string | null
+  amount_g: unknown
+  meal_type: string | null
+  calories: unknown
+  protein_g: unknown
+  carbs_g: unknown
+  fat_g: unknown
+  logged_at: string | null
+}
+
+function parseNullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 async function syncDailySummary(userId: string, date: string) {
   const { data: logs, error: logsError } = await supabaseAdmin
     .from('food_logs')
@@ -81,6 +98,63 @@ export async function GET(req: NextRequest) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(req.url)
+  const historyMode = searchParams.get('history') === '1'
+
+  if (historyMode) {
+    const rawLimit = Number(searchParams.get('limit') || 12)
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 20) : 12
+
+    const { data, error } = await supabaseAdmin
+      .from('food_logs')
+      .select('food_name, amount_g, meal_type, calories, protein_g, carbs_g, fat_g, logged_at, created_at')
+      .eq('user_id', session.user.id)
+      .order('created_at', { ascending: false })
+      .limit(limit * 10)
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    const historyMap = new Map<string, {
+      food_name: string
+      amount_g: number | null
+      calories: number
+      protein_g: number
+      carbs_g: number
+      fat_g: number
+      last_meal_type: string
+      last_logged_at: string
+      use_count: number
+    }>()
+
+    for (const row of (data || []) as HistoryLogRow[]) {
+      const foodName = row.food_name?.trim()
+      if (!foodName) continue
+
+      const key = foodName.toLocaleLowerCase()
+      const existing = historyMap.get(key)
+
+      if (existing) {
+        existing.use_count += 1
+        continue
+      }
+
+      historyMap.set(key, {
+        food_name: foodName,
+        amount_g: parseNullableNumber(row.amount_g),
+        calories: parseNumber(row.calories),
+        protein_g: parseNumber(row.protein_g),
+        carbs_g: parseNumber(row.carbs_g),
+        fat_g: parseNumber(row.fat_g),
+        last_meal_type: row.meal_type || 'snack',
+        last_logged_at: row.logged_at || new Date().toISOString().split('T')[0],
+        use_count: 1,
+      })
+    }
+
+    return NextResponse.json({
+      history: Array.from(historyMap.values()).slice(0, limit),
+    })
+  }
+
   const date = searchParams.get('date') || new Date().toISOString().split('T')[0]
 
   const { data, error } = await supabaseAdmin

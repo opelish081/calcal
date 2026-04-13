@@ -4,6 +4,8 @@ import crypto from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const appBaseUrl = (process.env.NEXTAUTH_URL || 'https://calcal.vercel.app').replace(/\/$/, '')
+const profileUrl = `${appBaseUrl}/profile`
 
 function verifyLineSignature(body: string, signature: string): boolean {
   const hash = crypto
@@ -21,17 +23,33 @@ async function getLineImageContent(messageId: string): Promise<Buffer> {
   return Buffer.from(buffer)
 }
 
-async function replyToLine(replyToken: string, text: string) {
-  await fetch('https://api.line.me/v2/bot/message/reply', {
+async function sendLineMessage(endpoint: 'reply' | 'push', payload: Record<string, unknown>) {
+  const response = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
     },
-    body: JSON.stringify({
-      replyToken,
-      messages: [{ type: 'text', text }],
-    }),
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`LINE ${endpoint} failed: ${response.status} ${errorText}`)
+  }
+}
+
+async function replyToLine(replyToken: string, text: string) {
+  await sendLineMessage('reply', {
+    replyToken,
+    messages: [{ type: 'text', text }],
+  })
+}
+
+async function pushToLine(to: string, text: string) {
+  await sendLineMessage('push', {
+    to,
+    messages: [{ type: 'text', text }],
   })
 }
 
@@ -56,43 +74,99 @@ export async function POST(req: NextRequest) {
 
   for (const event of events) {
     if (event.type !== 'message') continue
+
     const { replyToken, source, message } = event
     const lineUserId = source.userId
 
-    // Find linked user
+    if (!lineUserId) {
+      await replyToLine(replyToken, 'ตอนนี้บอทรองรับเฉพาะการคุยแบบ 1:1 กับ LINE Official Account')
+      continue
+    }
+
     const { data: profile } = await supabaseAdmin
       .from('user_profiles')
       .select('id, name')
       .eq('line_user_id', lineUserId)
-      .single()
+      .maybeSingle()
 
-    // Text: link account command
     if (message.type === 'text') {
       const text = message.text?.trim()
 
       if (text?.startsWith('/link ')) {
-        const token = text.replace('/link ', '').trim()
-        // Token would be generated from the website for linking
+        const token = text.replace('/link ', '').trim().toUpperCase()
         const { data: linkData } = await supabaseAdmin
           .from('user_profiles')
           .select('id, name')
           .eq('line_link_token', token)
-          .single()
+          .maybeSingle()
 
-        if (linkData) {
+        if (!linkData) {
+          await replyToLine(replyToken, '❌ Token ไม่ถูกต้อง กรุณาไปที่เว็บไซต์เพื่อรับ token ใหม่')
+          continue
+        }
+
+        const { data: existingLinkedProfile } = await supabaseAdmin
+          .from('user_profiles')
+          .select('id')
+          .eq('line_user_id', lineUserId)
+          .maybeSingle()
+
+        if (existingLinkedProfile && existingLinkedProfile.id !== linkData.id) {
           await supabaseAdmin
             .from('user_profiles')
-            .update({ line_user_id: lineUserId })
-            .eq('id', linkData.id)
-          await replyToLine(replyToken, `✅ เชื่อมต่อบัญชีสำเร็จ! สวัสดี ${linkData.name}\nส่งรูปอาหารมาได้เลย แล้วผมจะวิเคราะห์ให้`)
-        } else {
-          await replyToLine(replyToken, '❌ Token ไม่ถูกต้อง กรุณาไปที่เว็บไซต์เพื่อรับ token ใหม่')
+            .update({
+              line_user_id: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existingLinkedProfile.id)
         }
+
+        const { error: linkError } = await supabaseAdmin
+          .from('user_profiles')
+          .update({
+            line_user_id: lineUserId,
+            line_link_token: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', linkData.id)
+
+        if (linkError) {
+          console.error('LINE link error:', linkError)
+          await replyToLine(replyToken, '❌ เชื่อมต่อบัญชีไม่สำเร็จ กรุณาลองสร้าง token ใหม่จากเว็บไซต์')
+          continue
+        }
+
+        await replyToLine(replyToken, `✅ เชื่อมต่อบัญชีสำเร็จ! สวัสดี ${linkData.name}\nส่งรูปอาหารมาได้เลย แล้วผมจะวิเคราะห์ให้\nพิมพ์ /today เพื่อดูสรุปวันนี้`)
+        continue
+      }
+
+      if (text === '/unlink') {
+        if (!profile) {
+          await replyToLine(replyToken, `⚠️ ยังไม่ได้เชื่อมต่อบัญชี\nเข้าไปสร้าง token ได้ที่ ${profileUrl}`)
+          continue
+        }
+
+        const { error: unlinkError } = await supabaseAdmin
+          .from('user_profiles')
+          .update({
+            line_user_id: null,
+            line_link_token: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', profile.id)
+
+        if (unlinkError) {
+          console.error('LINE unlink error:', unlinkError)
+          await replyToLine(replyToken, '❌ ยกเลิกการเชื่อมต่อไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+          continue
+        }
+
+        await replyToLine(replyToken, '✅ ยกเลิกการเชื่อมต่อ LINE แล้ว\nหากต้องการเชื่อมใหม่ ให้สร้าง token ใหม่จากหน้าโปรไฟล์')
         continue
       }
 
       if (!profile) {
-        await replyToLine(replyToken, '⚠️ ยังไม่ได้เชื่อมต่อบัญชี\nพิมพ์: /link [token]\nรับ token ได้ที่ calcal.vercel.app/profile')
+        await replyToLine(replyToken, `⚠️ ยังไม่ได้เชื่อมต่อบัญชี\nพิมพ์: /link [token]\nรับ token ได้ที่ ${profileUrl}`)
         continue
       }
 
@@ -103,15 +177,16 @@ export async function POST(req: NextRequest) {
           .select('*')
           .eq('user_id', profile.id)
           .eq('summary_date', today)
-          .single()
+          .maybeSingle()
 
         if (summary) {
-          await replyToLine(replyToken,
+          await replyToLine(
+            replyToken,
             `📊 สรุปวันนี้\n\n` +
-            `🔥 แคลอรี่: ${Math.round(summary.total_calories)} kcal\n` +
-            `💪 โปรตีน: ${Math.round(summary.total_protein_g)}g\n` +
-            `🍞 คาร์บ: ${Math.round(summary.total_carbs_g)}g\n` +
-            `🫒 ไขมัน: ${Math.round(summary.total_fat_g)}g`
+              `🔥 แคลอรี่: ${Math.round(summary.total_calories)} kcal\n` +
+              `💪 โปรตีน: ${Math.round(summary.total_protein_g)}g\n` +
+              `🍞 คาร์บ: ${Math.round(summary.total_carbs_g)}g\n` +
+              `🫒 ไขมัน: ${Math.round(summary.total_fat_g)}g`
           )
         } else {
           await replyToLine(replyToken, '📋 ยังไม่มีข้อมูลการกินวันนี้\nส่งรูปอาหารมาเลย!')
@@ -119,11 +194,10 @@ export async function POST(req: NextRequest) {
         continue
       }
 
-      await replyToLine(replyToken, '📸 ส่งรูปอาหารมาได้เลย ผมจะวิเคราะห์แคลและโปรตีนให้\nหรือพิมพ์ /today เพื่อดูสรุปวันนี้')
+      await replyToLine(replyToken, '📸 ส่งรูปอาหารมาได้เลย ผมจะวิเคราะห์แคลและโปรตีนให้\nพิมพ์ /today เพื่อดูสรุปวันนี้\nพิมพ์ /unlink หากต้องการยกเลิกการเชื่อมต่อ')
       continue
     }
 
-    // Image: analyze food
     if (message.type === 'image') {
       if (!profile) {
         await replyToLine(replyToken, '⚠️ กรุณาเชื่อมต่อบัญชีก่อน\nพิมพ์: /link [token]')
@@ -148,10 +222,9 @@ export async function POST(req: NextRequest) {
           }],
         })
 
-        const textContent = response.content.find(c => c.type === 'text')?.text || '{}'
+        const textContent = response.content.find((content) => content.type === 'text')?.text || '{}'
         const analysis = JSON.parse(textContent.replace(/```json|```/g, '').trim())
 
-        // Save to Supabase
         const today = new Date().toISOString().split('T')[0]
         for (const food of analysis.foods || []) {
           await supabaseAdmin.from('food_logs').insert({
@@ -169,18 +242,19 @@ export async function POST(req: NextRequest) {
           })
         }
 
-        const t = analysis.total
-        const foodList = (analysis.foods || []).map((f: { name: string }) => `• ${f.name}`).join('\n')
-        await replyToLine(replyToken,
+        const total = analysis.total
+        const foodList = (analysis.foods || []).map((food: { name: string }) => `• ${food.name}`).join('\n')
+        await pushToLine(
+          lineUserId,
           `✅ บันทึกเรียบร้อย!\n\n${foodList}\n\n` +
-          `🔥 แคลอรี่รวม: ${t?.calories || 0} kcal\n` +
-          `💪 โปรตีน: ${t?.protein_g || 0}g\n` +
-          `🍞 คาร์บ: ${t?.carbs_g || 0}g\n\n` +
-          `${analysis.notes || ''}`
+            `🔥 แคลอรี่รวม: ${total?.calories || 0} kcal\n` +
+            `💪 โปรตีน: ${total?.protein_g || 0}g\n` +
+            `🍞 คาร์บ: ${total?.carbs_g || 0}g\n\n` +
+            `${analysis.notes || ''}`
         )
-      } catch (err) {
-        console.error('LINE analysis error:', err)
-        await replyToLine(replyToken, '❌ เกิดข้อผิดพลาด กรุณาลองใหม่')
+      } catch (error) {
+        console.error('LINE analysis error:', error)
+        await pushToLine(lineUserId, '❌ เกิดข้อผิดพลาด กรุณาลองใหม่')
       }
     }
   }

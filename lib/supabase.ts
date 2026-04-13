@@ -30,6 +30,7 @@ export type Database = {
           age: number | null
           gender: 'male' | 'female' | 'other' | null
           line_user_id: string | null
+          line_link_token: string | null
           created_at: string
           updated_at: string
         }

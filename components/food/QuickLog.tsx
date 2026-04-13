@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 
 const COMMON_FOODS = [
@@ -22,6 +22,21 @@ const MEAL_TYPES = [
   { value: 'snack', label: '🍎 ของว่าง' },
 ]
 
+type QuickFood = {
+  food_name: string
+  calories: number
+  protein_g: number
+  carbs_g: number
+  fat_g: number
+  amount_g?: number | null
+}
+
+type FoodHistoryItem = QuickFood & {
+  last_meal_type: string
+  last_logged_at: string
+  use_count: number
+}
+
 function guessCurrentMeal(): string {
   const h = new Date().getHours()
   if (h >= 6 && h < 10) return 'breakfast'
@@ -39,9 +54,12 @@ export default function QuickLog({
   onSaved: () => void
   loggedAt?: string
 }) {
-  const [mode, setMode] = useState<'quick' | 'manual'>('quick')
+  const [mode, setMode] = useState<'quick' | 'history' | 'manual'>('quick')
   const [mealType, setMealType] = useState(guessCurrentMeal())
   const [saving, setSaving] = useState(false)
+  const [historyItems, setHistoryItems] = useState<FoodHistoryItem[]>([])
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   // Manual mode fields
   const [name, setName] = useState('')
@@ -50,10 +68,13 @@ export default function QuickLog({
   const [carbs, setCarbs] = useState('')
   const [fat, setFat] = useState('')
 
-  async function saveFood(food: {
-    food_name: string; calories: number; protein_g: number
-    carbs_g: number; fat_g: number; amount_g?: number
-  }) {
+  useEffect(() => {
+    if (mode === 'history' && !historyLoaded && !historyLoading) {
+      void loadHistory()
+    }
+  }, [mode, historyLoaded, historyLoading])
+
+  async function saveFood(food: QuickFood) {
     setSaving(true)
     const res = await fetch('/api/food/log', {
       method: 'POST',
@@ -67,6 +88,23 @@ export default function QuickLog({
       toast.error('บันทึกไม่สำเร็จ')
     }
     setSaving(false)
+  }
+
+  async function loadHistory() {
+    setHistoryLoading(true)
+    const res = await fetch('/api/food/log?history=1&limit=12', {
+      cache: 'no-store',
+    })
+    const data = await res.json().catch(() => ({}))
+
+    if (res.ok) {
+      setHistoryItems(data.history || [])
+      setHistoryLoaded(true)
+    } else {
+      toast.error(data.error || 'โหลดประวัติอาหารไม่สำเร็จ')
+    }
+
+    setHistoryLoading(false)
   }
 
   async function handleManualSave() {
@@ -114,7 +152,7 @@ export default function QuickLog({
 
           {/* Mode toggle */}
           <div className="flex gap-2 mb-5 bg-gray-100 rounded-xl p-1">
-            {(['quick', 'manual'] as const).map(m => (
+            {(['quick', 'history', 'manual'] as const).map(m => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
@@ -122,7 +160,7 @@ export default function QuickLog({
                   mode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'
                 }`}
               >
-                {m === 'quick' ? '⚡ รายการด่วน' : '✏️ กรอกเอง'}
+                {m === 'quick' ? '⚡ รายการด่วน' : m === 'history' ? '🕘 ประวัติ' : '✏️ กรอกเอง'}
               </button>
             ))}
           </div>
@@ -141,6 +179,59 @@ export default function QuickLog({
                     <p className="text-xs text-gray-400">{food.calories} kcal · โปรตีน {food.protein_g}g</p>
                   </div>
                   <span className="text-gray-300 text-lg">+</span>
+                </button>
+              ))}
+            </div>
+          ) : mode === 'history' ? (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-400 mb-3">
+                เมนูที่เคยบันทึกล่าสุด กดหนึ่งครั้งเพื่อเพิ่มซ้ำในมื้อที่เลือกตอนนี้
+              </p>
+              {historyLoading && (
+                <div className="space-y-2">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div key={index} className="w-full rounded-xl bg-gray-50 px-4 py-3">
+                      <div className="h-4 w-32 rounded bg-gray-200 animate-pulse" />
+                      <div className="mt-2 h-3 w-40 rounded bg-gray-100 animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!historyLoading && historyItems.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-5 text-center">
+                  <p className="text-sm text-gray-500">ยังไม่มีประวัติอาหาร</p>
+                  <p className="mt-1 text-xs text-gray-400">พอลองบันทึกอาหารสัก 1-2 รายการ ประวัติจะโผล่ตรงนี้ทันที</p>
+                </div>
+              )}
+
+              {!historyLoading && historyItems.map(item => (
+                <button
+                  key={`${item.food_name}-${item.last_logged_at}`}
+                  onClick={() => saveFood({
+                    food_name: item.food_name,
+                    amount_g: item.amount_g,
+                    calories: item.calories,
+                    protein_g: item.protein_g,
+                    carbs_g: item.carbs_g,
+                    fat_g: item.fat_g,
+                  })}
+                  disabled={saving}
+                  className="w-full rounded-xl bg-gray-50 px-4 py-3 text-left transition-all hover:bg-gray-100"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-gray-900">{item.food_name}</p>
+                      <p className="text-xs text-gray-400">
+                        {item.calories} kcal · โปรตีน {item.protein_g}g
+                        {item.amount_g ? ` · ${Math.round(item.amount_g)}g` : ''}
+                      </p>
+                      <p className="mt-1 text-[11px] text-gray-300">
+                        ล่าสุด {MEAL_TYPES.find(m => m.value === item.last_meal_type)?.label || '🍎 ของว่าง'} · {item.last_logged_at} · ใช้แล้ว {item.use_count} ครั้ง
+                      </p>
+                    </div>
+                    <span className="flex-shrink-0 text-gray-300 text-lg">+</span>
+                  </div>
                 </button>
               ))}
             </div>

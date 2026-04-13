@@ -1,19 +1,33 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useSession, signOut } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
 import { PROGRAM_LABELS, calculateTargets, type ActivityLevel, type Goal } from '@/lib/nutrition'
 
+type LineLinkState = {
+  lineLinked: boolean
+  lineUserId: string | null
+  lineLinkToken: string | null
+  lineCommand: string | null
+}
+
+function maskLineUserId(lineUserId?: string | null) {
+  if (!lineUserId) return null
+  if (lineUserId.length <= 8) return lineUserId
+  return `${lineUserId.slice(0, 4)}...${lineUserId.slice(-4)}`
+}
+
 export default function ProfilePage() {
   const { data: session } = useSession()
-  const router = useRouter()
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null)
   const [program, setProgram] = useState<Record<string, unknown> | null>(null)
   const [editMode, setEditMode] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [lineToken, setLineToken] = useState<string | null>(null)
+  const [lineState, setLineState] = useState<LineLinkState | null>(null)
+  const [lineLoading, setLineLoading] = useState(true)
+  const [lineBusy, setLineBusy] = useState(false)
+  const [lineDisconnecting, setLineDisconnecting] = useState(false)
 
   // Edit form
   const [weight, setWeight] = useState('')
@@ -23,7 +37,10 @@ export default function ProfilePage() {
   const [activity, setActivity] = useState<ActivityLevel>('light_active')
   const [goal, setGoal] = useState<Goal>('maintain')
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => {
+    fetchData()
+    fetchLineState()
+  }, [])
 
   async function fetchData() {
     const res = await fetch('/api/goals')
@@ -72,12 +89,64 @@ export default function ProfilePage() {
     setSaving(false)
   }
 
+  async function fetchLineState(showError = true) {
+    setLineLoading(true)
+    const res = await fetch('/api/line/link-token')
+    const data = await res.json()
+
+    if (!res.ok) {
+      if (showError) toast.error(data.error || 'โหลดสถานะ LINE ไม่สำเร็จ')
+      setLineLoading(false)
+      return
+    }
+
+    setLineState(data)
+    setLineLoading(false)
+  }
+
+  async function copyLineCommand(command?: string | null, showToast = true) {
+    if (!command) return
+
+    try {
+      await navigator.clipboard.writeText(command)
+      if (showToast) toast.success('คัดลอกคำสั่งแล้ว!')
+    } catch {
+      toast.error('คัดลอกไม่สำเร็จ')
+    }
+  }
+
   async function generateLineToken() {
-    // Generate a simple token for LINE linking
-    const token = Math.random().toString(36).substring(2, 10).toUpperCase()
-    // In production: save this token to the user's profile in Supabase
-    setLineToken(token)
-    toast.success('คัดลอก token แล้ว!')
+    setLineBusy(true)
+    const res = await fetch('/api/line/link-token', { method: 'POST' })
+    const data = await res.json()
+
+    if (res.ok) {
+      setLineState(data)
+      await copyLineCommand(data.lineCommand, false)
+      toast.success(data.lineLinked ? 'สร้าง token ใหม่สำหรับเชื่อม LINE แล้ว' : 'สร้าง token สำหรับเชื่อม LINE แล้ว')
+    } else {
+      toast.error(data.error || 'สร้าง token ไม่สำเร็จ')
+    }
+
+    setLineBusy(false)
+  }
+
+  async function disconnectLine() {
+    if (!window.confirm('ต้องการยกเลิกการเชื่อมต่อ LINE ใช่ไหม?')) return
+
+    setLineDisconnecting(true)
+    const res = await fetch('/api/line/link-token', { method: 'DELETE' })
+    const data = await res.json()
+
+    if (res.ok) {
+      setLineState(data)
+      toast.success('ยกเลิกการเชื่อมต่อ LINE แล้ว')
+      fetchData()
+    } else {
+      toast.error(data.error || 'ยกเลิกการเชื่อมต่อไม่สำเร็จ')
+    }
+
+    setLineDisconnecting(false)
   }
 
   const targets = weight && height && age
@@ -231,30 +300,61 @@ export default function ProfilePage() {
             <span className="text-xl">💬</span>
             <h2 className="text-sm font-medium text-gray-900">เชื่อมต่อ LINE Bot</h2>
           </div>
-          {profile?.line_user_id ? (
-            <div className="bg-green-50 rounded-xl p-3 text-sm text-green-700 flex items-center gap-2">
-              <span>✅</span> เชื่อมต่อ LINE แล้ว
+          {lineLoading ? (
+            <div className="bg-gray-50 rounded-xl p-3 text-sm text-gray-500">
+              กำลังโหลดสถานะการเชื่อมต่อ LINE...
             </div>
           ) : (
             <>
-              <p className="text-xs text-gray-500 leading-relaxed">
-                เพิ่มเพื่อน LINE Bot → พิมพ์ /link [token] เพื่อเชื่อมบัญชี
-              </p>
-              {lineToken ? (
-                <div className="bg-gray-100 rounded-xl p-3 flex items-center justify-between">
-                  <code className="text-sm font-mono font-medium text-gray-900">/link {lineToken}</code>
-                  <button
-                    onClick={() => { navigator.clipboard.writeText(`/link ${lineToken}`); toast.success('คัดลอกแล้ว!') }}
-                    className="text-xs text-gray-500 hover:text-gray-700"
-                  >
-                    คัดลอก
-                  </button>
+              {lineState?.lineLinked ? (
+                <div className="bg-green-50 rounded-xl p-3 text-sm text-green-700 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span>✅</span>
+                    <span>เชื่อมต่อ LINE แล้ว</span>
+                  </div>
+                  {lineState.lineUserId ? (
+                    <p className="text-xs text-green-600">LINE user: {maskLineUserId(lineState.lineUserId)}</p>
+                  ) : null}
                 </div>
               ) : (
-                <button onClick={generateLineToken} className="btn-primary py-3 w-full">
-                  รับ Token สำหรับ LINE
-                </button>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  เพิ่มเพื่อน LINE Bot แล้วพิมพ์คำสั่ง `/link [token]` เพื่อเชื่อมบัญชี
+                </p>
               )}
+
+              {lineState?.lineCommand ? (
+                <div className="bg-gray-100 rounded-xl p-3 space-y-2">
+                  <p className="text-xs text-gray-500">ส่งคำสั่งนี้ในแชต LINE Bot เพื่อเชื่อมบัญชี</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <code className="text-sm font-mono font-medium text-gray-900 break-all">{lineState.lineCommand}</code>
+                    <button
+                      onClick={() => copyLineCommand(lineState.lineCommand)}
+                      className="shrink-0 text-xs text-gray-500 hover:text-gray-700"
+                    >
+                      คัดลอก
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button onClick={generateLineToken} disabled={lineBusy} className="btn-primary py-3 w-full disabled:opacity-60">
+                  {lineBusy
+                    ? 'กำลังสร้าง token...'
+                    : lineState?.lineLinked
+                      ? 'สร้าง Token ใหม่เพื่อเชื่อมใหม่'
+                      : 'รับ Token สำหรับ LINE'}
+                </button>
+                {lineState?.lineLinked ? (
+                  <button
+                    onClick={disconnectLine}
+                    disabled={lineDisconnecting}
+                    className="btn-ghost border border-gray-200 py-3 w-full disabled:opacity-60"
+                  >
+                    {lineDisconnecting ? 'กำลังยกเลิก...' : 'ยกเลิกการเชื่อมต่อ'}
+                  </button>
+                ) : null}
+              </div>
             </>
           )}
         </div>

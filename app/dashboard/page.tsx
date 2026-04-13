@@ -162,7 +162,7 @@ export default function DashboardPage() {
           selectedDate={selectedDate}
           maxDate={todayStr}
           onSelect={setSelectedDate}
-          helperText="แตะวันที่บนปฏิทินเพื่อดูอาหาร แคลอรี่ และกราฟย้อนหลังทันที"
+          compact
         />
 
         {/* Calorie summary card */}

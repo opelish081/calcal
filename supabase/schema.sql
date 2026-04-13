@@ -22,10 +22,15 @@ create table if not exists public.user_profiles (
   gender      text check (gender in ('male', 'female', 'other')),
   -- LINE integration
   line_user_id text unique,
+  line_link_token text,
   -- Timestamps
   created_at  timestamptz default now(),
   updated_at  timestamptz default now()
 );
+
+create unique index if not exists user_profiles_line_link_token_idx
+  on public.user_profiles (line_link_token)
+  where line_link_token is not null;
 
 -- =============================================
 -- PROGRAMS (user nutrition goals)
@@ -98,6 +103,9 @@ create table if not exists public.food_logs (
 
 create index if not exists food_logs_user_logged_at_idx
   on public.food_logs (user_id, logged_at);
+
+create index if not exists food_logs_user_created_at_idx
+  on public.food_logs (user_id, created_at desc);
 
 -- =============================================
 -- DAILY SUMMARIES (computed/cached)
